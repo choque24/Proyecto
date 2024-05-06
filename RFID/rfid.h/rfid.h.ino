@@ -1,0 +1,219 @@
+#include <EEPROM.h>
+#include <Wire.h>
+#include <SPI.h>
+#include <MFRC522.h>
+#define EEPROM_ADDRESS 0x50 // Dirección I2C de la EEPROM externa (24LC32A)
+
+constexpr uint8_t RST_PIN = 9;     
+constexpr uint8_t SS_PIN = 10;     
+
+MFRC522 mfrc522(SS_PIN, RST_PIN);   
+char c;
+struct Usuario {
+  char nombre[20];
+  char apellido[20];
+  char permisos; // Se define una estructura de datos llamada Usuario que almacena el nombre, el apellido y los permisos de un usuario.
+};
+void agregarUsuariosAlEEPROM() {
+  Usuario usuarios[3]; // Array para almacenar información de hasta 3 usuarios
+
+  for (int i = 0; i < 3; ++i) {
+    Serial.println("Ingrese nombre para el usuario:");
+    while(!Serial.available()){}
+    Serial.readBytesUntil('\n', usuarios[i].nombre, sizeof(usuarios[i].nombre) - 1);
+
+    Serial.println("Ingrese apellido para el usuario:");
+    while(!Serial.available()){}
+    Serial.readBytesUntil('\n', usuarios[i].apellido, sizeof(usuarios[i].apellido) - 1);
+
+    Serial.println("Ingrese permisos para el usuario (un carácter):");
+    while(!Serial.available()){}
+    usuarios[i].permisos = Serial.read(); // 
+
+    // Escribir en EEPROM
+    Wire.beginTransmission(EEPROM_ADDRESS);
+    Wire.write(i * sizeof(Usuario));
+    Wire.write((byte*)&usuarios[i], sizeof(Usuario));
+    Wire.endTransmission(); //Esta función permite al "Administrador" ingresar la información de hasta tres usuarios y escribe esa información en la EEPROM externa.
+    if (Wire.endTransmission() != 0) {
+    Serial.println("Error al finalizar la transmisión");
+}
+  }
+
+  Serial.println("Usuarios agregados con éxito.");
+}
+void leerUsuariosDesdeEEPROM() {
+  Usuario usuario;
+
+  for (int i = 0; i < 3; ++i) {
+    // Leer desde EEPROM
+    Wire.beginTransmission(EEPROM_ADDRESS);
+    Wire.write(i * sizeof(Usuario));
+    Wire.endTransmission();
+    Wire.requestFrom(EEPROM_ADDRESS, sizeof(Usuario));
+
+    if (Wire.available() == sizeof(Usuario)) {
+      Wire.readBytes((byte*)&usuario, sizeof(Usuario));//Esta función lee la información almacenada en la EEPROM externa para cada uno de los tres usuarios y la muestra en el puerto serie.
+     if (Wire.endTransmission() != 0) {
+    Serial.println("Error al finalizar la transmisión");
+}
+
+      Serial.print("Usuario ");
+      Serial.print(i + 1);
+      Serial.print(": ");
+      Serial.print("Nombre: ");
+      Serial.print(usuario.nombre);
+      Serial.print(", Apellido: ");
+      Serial.print(usuario.apellido);
+      Serial.print(", Permisos: ");
+      Serial.println(usuario.permisos);
+    }
+  }
+}
+
+
+void setup() {
+  Serial.begin(9600);       
+  SPI.begin();             
+  mfrc522.PCD_Init();        
+}
+
+
+ void loop() {
+  Serial.println("1. Escribir");
+  Serial.println("2. Leer");
+  Serial.println("3. Administrador");
+  while (!Serial.available()) {}
+
+  c = Serial.read();
+  switch (c) {
+    case '1':
+      Escribir();
+      break;
+    case '2':
+      Leer();
+      break;
+    case '3':
+      agregarUsuariosAlEEPROM();
+      leerUsuariosDesdeEEPROM();
+      break; //En el bucle principal (loop()), se ha modificado para incluir una opción adicional "3. Administrador", que permite al administrador agregar nuevos usuarios y ver la información almacenada en la EEPROM.
+  }
+}
+void Escribir()
+{
+
+  MFRC522::MIFARE_Key key;
+  for (byte i = 0; i < 6; i++) key.keyByte[i] = 0xFF;
+
+  // Look for new cards
+  while ( ! mfrc522.PICC_IsNewCardPresent()) {
+    //return;
+  }
+
+  // Select one of the cards
+  while ( ! mfrc522.PICC_ReadCardSerial()) {
+    //return;
+  }
+
+  Serial.print(F("Card UID:"));    
+  for (byte i = 0; i < mfrc522.uid.size; i++) {
+    Serial.print(mfrc522.uid.uidByte[i] < 0x10 ? " 0" : " ");
+    Serial.print(mfrc522.uid.uidByte[i], HEX);
+  }
+  Serial.print(F(" PICC type: "));   
+  MFRC522::PICC_Type piccType = mfrc522.PICC_GetType(mfrc522.uid.sak);
+  Serial.println(mfrc522.PICC_GetTypeName(piccType));
+
+  byte buffer[34];
+  byte block;
+  MFRC522::StatusCode status;
+  byte len;
+
+  Serial.setTimeout(20000L) ;     
+
+  Serial.println(F("Entra codigo terminando con #"));
+  len = Serial.readBytesUntil('#', (char *) buffer, 30) ; 
+  for (byte i = len; i < 30; i++) buffer[i] = ' ';     
+
+  block = 1;
+  //Serial.println(F("Authenticating using key A..."));
+  status = mfrc522.PCD_Authenticate(MFRC522::PICC_CMD_MF_AUTH_KEY_A, block, &key, &(mfrc522.uid));
+  if (status != MFRC522::STATUS_OK) {
+    Serial.print(F("PCD_Authenticate() failed: "));
+    Serial.println(mfrc522.GetStatusCodeName(status));
+    return;
+  }
+  else Serial.println(F("PCD_Authenticate() success: "));
+
+  // Write block
+  status = mfrc522.MIFARE_Write(block, buffer, 16);
+  if (status != MFRC522::STATUS_OK) {
+    Serial.print(F("MIFARE_Write() failed: "));
+    Serial.println(mfrc522.GetStatusCodeName(status));
+    return;
+  }
+  else Serial.println(F("MIFARE_Write() success: "));
+  Serial.println(" ");
+  mfrc522.PICC_HaltA(); 
+  mfrc522.PCD_StopCrypto1();  
+}
+void Leer()
+{
+  MFRC522::MIFARE_Key key;
+  for (byte i = 0; i < 6; i++) key.keyByte[i] = 0xFF;
+
+  //some variables we need
+  byte block;
+  byte len;
+  MFRC522::StatusCode status;
+
+  
+
+  // Look for new cards
+  while ( ! mfrc522.PICC_IsNewCardPresent()) {
+    //return;
+  }
+
+  // Select one of the cards
+  while ( ! mfrc522.PICC_ReadCardSerial()) {
+    //return;
+  }
+
+  Serial.println(F("*Card Detected:*"));
+
+
+
+  mfrc522.PICC_DumpDetailsToSerial(&(mfrc522.uid)); //dump some details about the card
+
+  //mfrc522.PICC_DumpToSerial(&(mfrc522.uid));      //uncomment this to see all blocks in hex
+  len = 18;
+  
+  byte buffer2[18];
+  block = 1;
+
+  status = mfrc522.PCD_Authenticate(MFRC522::PICC_CMD_MF_AUTH_KEY_A, 1, &key, &(mfrc522.uid)); 
+  if (status != MFRC522::STATUS_OK) {
+    Serial.print(F("Authentication failed: "));
+    Serial.println(mfrc522.GetStatusCodeName(status));
+    return;
+  }
+
+  status = mfrc522.MIFARE_Read(block, buffer2, &len);
+  if (status != MFRC522::STATUS_OK) {
+    Serial.print(F("Reading failed: "));
+    Serial.println(mfrc522.GetStatusCodeName(status));
+    return;
+  }
+
+
+  for (uint8_t i = 0; i < 16; i++) {
+    Serial.write(buffer2[i] );
+  }
+
+  Serial.println(F("\n*End Reading*\n"));
+
+  delay(1000); 
+
+  mfrc522.PICC_HaltA();
+  mfrc522.PCD_StopCrypto1();
+}
